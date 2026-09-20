@@ -146,6 +146,7 @@ class IndexerTest(jtu.JaxTestCase):
       ((4, 0), (3, 5)),
       ((slice(3, 2), 0), (3, 5)),
       ((Slice(2, 2), 0), (3, 5)),
+      ((Slice(0, 4), 0), (3, 5)),
   )
   def test_invalid_ndindexer_oob(self, indices, shape):
     with self.assertRaisesRegex(ValueError, "Out of bound"):

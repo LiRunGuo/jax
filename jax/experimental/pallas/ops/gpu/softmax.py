@@ -41,9 +41,10 @@ def _vmappable_softmax_kernel(
 ):
   row_len = input_ref.shape[-1]
 
-  mask = jnp.arange(block_row) < row_len
+  col_idx = jnp.arange(block_row)
+  mask = col_idx < row_len
   row = plgpu.load(
-      input_ref.at[pl.ds(0, block_row)], mask=mask, other=-float("inf")
+      input_ref.at[col_idx], mask=mask, other=-float("inf")
   )
 
   row_max = jnp.max(row, axis=0)
@@ -51,7 +52,7 @@ def _vmappable_softmax_kernel(
   denominator = jnp.sum(numerator, axis=0)
 
   plgpu.store(
-      probs_ref.at[pl.ds(0, block_row)],
+      probs_ref.at[col_idx],
       (numerator / denominator).astype(probs_ref.dtype),
       mask=mask
   )

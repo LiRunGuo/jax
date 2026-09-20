@@ -578,12 +578,12 @@ class InterpretTest(jtu.JaxTestCase):
             barrier=plgpu.Barrier(), smem=plgpu.SMEM((4, 2), jnp.int32)
         ),
     )
-    def _kernel(in_gmem, out_gmem, barrier, smem):
-      plgpu.copy_gmem_to_smem(in_gmem.at[pl.ds(0, 4)], smem, barrier)
+    def _kernel(start_ref, in_gmem, out_gmem, barrier, smem):
+      plgpu.copy_gmem_to_smem(in_gmem.at[pl.ds(start_ref[0], 4)], smem, barrier)
       plgpu.barrier_wait(barrier)
       out_gmem[...] = smem[...]
 
-    y = np.asarray(_kernel(x))
+    y = np.asarray(_kernel(jnp.array([0], jnp.int32), x))
     np.testing.assert_array_equal(y[:3], x)
     np.testing.assert_array_equal(y[3], np.zeros((2,), np.int32))
 

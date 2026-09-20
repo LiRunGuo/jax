@@ -3170,7 +3170,7 @@ class PallasPrimitivesTest(PallasBaseTest):
       x = pallas_primitives.load(x_ref, expr())
       return [x]
     jaxpr, _ = trace_to_jaxpr(
-        body, state.shaped_array_ref((4, 3, 2), jnp.int32)
+        body, state.shaped_array_ref((4, 3, 6), jnp.int32)
     )
     self.assertIn(expected, jaxpr.pretty_print(use_color=False))
 
@@ -3188,15 +3188,15 @@ class PallasPrimitivesTest(PallasBaseTest):
       )
       return []
     jaxpr, _ = trace_to_jaxpr(
-        body, state.shaped_array_ref((4, 3, 2), jnp.int32)
+        body, state.shaped_array_ref((4, 3, 6), jnp.int32)
     )
     self.assertIn(expected, jaxpr.pretty_print(use_color=False))
 
   @parameterized.parameters(*[
     (lambda: (pl.dslice(0, 4), slice(None), slice(None)),
-    "c:i32[4,3,2], a[:,:,:] <-"),
+    "c:i32[4,3,6], a[:,:,:] <-"),
     (lambda: (pl.dslice(0, 3), slice(None), slice(None)),
-    "c:i32[3,3,2], a[:3,:,:] <-"),
+    "c:i32[3,3,6], a[:3,:,:] <-"),
     (lambda: (pl.dslice(1, 3), slice(None), pl.dslice(0, 4)),
     "c:i32[3,3,4], a[1:,:,:4] <-"),
     (lambda: (jnp.arange(5), slice(None), pl.dslice(0, 4)),
@@ -3211,7 +3211,7 @@ class PallasPrimitivesTest(PallasBaseTest):
       )
       return [x]
     jaxpr, _ = trace_to_jaxpr(
-        body, state.shaped_array_ref((4, 3, 2), jnp.int32)
+        body, state.shaped_array_ref((4, 3, 6), jnp.int32)
     )
     self.assertIn(expected, jaxpr.pretty_print(use_color=False))
 
