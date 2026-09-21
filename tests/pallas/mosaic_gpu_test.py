@@ -42,6 +42,8 @@ from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import arith as arith_dialect
 from jax._src.lib.mlir.dialects import gpu as gpu_dialect
 from jax._src.lib.mlir.dialects import memref as memref_dialect
+from jax._src.pallas import core as pallas_core
+from jax._src.pallas.mosaic.error_handling import VerificationError
 from jax._src.pallas.mosaic_gpu import core as gpu_core
 from jax._src.pallas.mosaic_gpu import lowering as mgpu_lowering
 from jax._src.pallas.mosaic_gpu import pipeline as mgpu_pipeline
@@ -49,7 +51,6 @@ from jax._src.state import types as state_types
 from jax.experimental import pallas as pl
 import jax.experimental.mosaic.gpu as mgpu
 from jax.experimental.pallas import mosaic_gpu as _plgpu
-from jax._src.pallas.mosaic.error_handling import VerificationError
 import jax.numpy as jnp
 import numpy as np
 
@@ -9671,6 +9672,148 @@ class PrettyPrintingTest(PallasTest):
             jax.ShapeDtypeStruct((128, 192), jnp.float16),
         )
     )
+
+
+class CostEstimateTest(PallasTest):
+
+  FLOPS = 1234
+  TRANSCENDENTALS = 21
+  BYTES_ACCESSED = 5678
+  REMOTE_BYTES_TRANSFERRED = 91
+
+  def cost_estimate(self):
+    return pl.CostEstimate(
+        flops=self.FLOPS,
+        transcendentals=self.TRANSCENDENTALS,
+        bytes_accessed=self.BYTES_ACCESSED,
+        remote_bytes_transferred=self.REMOTE_BYTES_TRANSFERRED,
+    )
+
+  def add_one_kernel(self, cost_estimate):
+    @functools.partial(
+        self.kernel,
+        out_type=jax.ShapeDtypeStruct((128, 128), jnp.float32),
+        cost_estimate=cost_estimate,
+    )
+    def kernel(x_ref, o_ref):
+      o_ref[...] = x_ref[...] + 1.0
+
+    return kernel
+
+  def lower_to_hlo(self, f, *args):
+    return jax.jit(f).lower(*args).compiler_ir("hlo").as_hlo_text()
+
+  def collect_cost_estimates(self, jaxpr):
+    """Returns the ``cost_estimate`` param of every eqn that has one.
+
+    ``None`` entries are kept, so that callers can distinguish "the estimate
+    was dropped" from "no eqn carries an estimate at all".
+    """
+    cost_estimates = []
+
+    def visit(jaxpr):
+      for eqn in jaxpr.eqns:
+        if "cost_estimate" in eqn.params:
+          cost_estimates.append(eqn.params["cost_estimate"])
+      for subjaxpr in jax_core.subjaxprs(jaxpr):
+        visit(subjaxpr)
+
+    visit(jaxpr)
+    return cost_estimates
+
+  def test_cost_estimate_is_attached_to_the_custom_call(self):
+    x = jnp.arange(128 * 128, dtype=jnp.float32).reshape(128, 128)
+    kernel = self.add_one_kernel(self.cost_estimate())
+
+    hlo = self.lower_to_hlo(kernel, x)
+
+    self.assertIn("cost_estimate_json", hlo)
+    self.assertRegex(
+        hlo, rf"cost_estimate_json\s*=\s*.*flops\\22\s*:\s*{self.FLOPS}"
+    )
+    self.assertRegex(
+        hlo,
+        rf"cost_estimate_json\s*=\s*.*bytes_accessed\\22\s*:"
+        rf"\s*{self.BYTES_ACCESSED}",
+    )
+
+  def test_no_cost_estimate_by_default(self):
+    x = jnp.arange(128 * 128, dtype=jnp.float32).reshape(128, 128)
+    kernel = self.add_one_kernel(None)
+
+    hlo = self.lower_to_hlo(kernel, x)
+
+    self.assertNotIn("cost_estimate_json", hlo)
+
+  def test_cost_estimate_is_scaled_by_the_vmap_axis_size(self):
+    axis_size = 3
+    x = jnp.arange(axis_size * 128 * 128, dtype=jnp.float32).reshape(
+        axis_size, 128, 128
+    )
+    kernel = self.add_one_kernel(self.cost_estimate())
+
+    hlo = self.lower_to_hlo(jax.vmap(kernel), x)
+
+    self.assertIn("cost_estimate_json", hlo)
+    self.assertRegex(
+        hlo,
+        rf"cost_estimate_json\s*=\s*.*flops\\22\s*:"
+        rf"\s*{axis_size * self.FLOPS}",
+    )
+    self.assertRegex(
+        hlo,
+        rf"cost_estimate_json\s*=\s*.*bytes_accessed\\22\s*:"
+        rf"\s*{axis_size * self.BYTES_ACCESSED}",
+    )
+
+  def test_no_cost_estimate_with_symbolic_vmap_axis_size(self):
+    # Mosaic GPU cannot lower symbolic shapes, so this can only check the
+    # traced jaxpr: the point is that a symbolic axis size drops the estimate
+    # instead of being scaled into it, which would fail on ``int(DimExpr)``.
+    kernel = self.add_one_kernel(self.cost_estimate())
+    x_shape = jax.ShapeDtypeStruct(
+        export.symbolic_shape("b, 128, 128"), jnp.float32
+    )
+
+    with pallas_core.pallas_export_experimental(dynamic_shapes=True):
+      jaxpr = jax.make_jaxpr(jax.vmap(kernel))(x_shape).jaxpr
+
+    cost_estimates = self.collect_cost_estimates(jaxpr)
+    self.assertNotEmpty(cost_estimates)
+    self.assertEqual(cost_estimates, [None] * len(cost_estimates))
+
+  def test_vmap_scales_every_cost_estimate_field(self):
+    # Only ``flops`` and ``bytes_accessed`` are serialized into the custom
+    # call, so inspect the jaxpr to check the remaining fields.
+    axis_size = 3
+    x = jnp.arange(axis_size * 128 * 128, dtype=jnp.float32).reshape(
+        axis_size, 128, 128
+    )
+    kernel = self.add_one_kernel(self.cost_estimate())
+
+    jaxpr = jax.make_jaxpr(jax.vmap(kernel))(x).jaxpr
+
+    cost_estimates = self.collect_cost_estimates(jaxpr)
+    self.assertNotEmpty(cost_estimates)
+    expected = pl.CostEstimate(
+        flops=axis_size * self.FLOPS,
+        transcendentals=axis_size * self.TRANSCENDENTALS,
+        bytes_accessed=axis_size * self.BYTES_ACCESSED,
+        remote_bytes_transferred=axis_size * self.REMOTE_BYTES_TRANSFERRED,
+    )
+    for cost_estimate in cost_estimates:
+      self.assertEqual(cost_estimate, expected)
+
+  def test_cost_estimate_is_unchanged_without_vmap(self):
+    x = jnp.arange(128 * 128, dtype=jnp.float32).reshape(128, 128)
+    kernel = self.add_one_kernel(self.cost_estimate())
+
+    jaxpr = jax.make_jaxpr(kernel)(x).jaxpr
+
+    cost_estimates = self.collect_cost_estimates(jaxpr)
+    self.assertNotEmpty(cost_estimates)
+    for cost_estimate in cost_estimates:
+      self.assertEqual(cost_estimate, self.cost_estimate())
 
 
 class ExportTest(PallasTest):

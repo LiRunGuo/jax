@@ -22,6 +22,7 @@ import functools
 import hashlib
 import io
 import itertools
+import json
 import math
 import os
 import pathlib
@@ -214,6 +215,7 @@ def _mosaic_gpu_lowering_rule(
     out_types,
     inout_types,
     input_output_aliases: tuple[tuple[int, int], ...] = (),
+    cost_estimate: Any = None,
     use_custom_barrier: bool = False,
     skip_device_barrier: bool = False,
 ):
@@ -299,6 +301,12 @@ def _mosaic_gpu_lowering_rule(
           launch_context.uses_collective_metadata(module)
       ),
   )
+  if cost_estimate is not None:
+    cost_json = json.dumps({
+        "flops": int(cost_estimate.flops),
+        "bytes_accessed": int(cost_estimate.bytes_accessed),
+    })
+    backend_config["cost_estimate_json"] = ir.StringAttr.get(cost_json)
 
   frontend_attributes: dict[str, ir.Attribute] = {}
 
@@ -364,6 +372,7 @@ def _mosaic_gpu_lowering_rule(
       api_version=4,
       extra_attributes=extra_attributes,
   ).results
+
 
 mlir.register_lowering(mosaic_gpu_p, _mosaic_gpu_lowering_rule, "cuda")
 
