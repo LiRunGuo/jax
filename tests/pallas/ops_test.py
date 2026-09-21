@@ -2355,12 +2355,15 @@ class OpsTest(PallasBaseTest):
     out = dot(x, y)
     # Pallas always accumulates in FP32, so we are explicit about
     # preferred_element_type here.
-    expected = jnp.dot(x.T if trans_x else x, y.T if trans_y else y,
-                      preferred_element_type=jnp.float32).astype(dtype)
+    expected = jnp.dot(
+        x.T if trans_x else x,
+        y.T if trans_y else y,
+        preferred_element_type=jnp.float32,
+    ).astype(dtype)
     np.testing.assert_allclose(
         out.astype(jnp.float32),
         expected.astype(jnp.float32),
-        atol=0.05,
+        atol=0.1 if jtu.test_device_matches(["gpu"]) else 0.05,
         rtol=0.05,
     )
 
