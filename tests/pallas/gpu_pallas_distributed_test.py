@@ -29,11 +29,13 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import jax
 from jax import lax
+
 from jax._src import dtypes
 from jax._src import test_multiprocess as jt_multiprocess
 from jax._src import test_util as jtu
 from jax._src.config import config
 from jax._src.lib import cuda_versions
+from jax._src.lib import xla_client
 from jax.experimental import multihost_utils
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as _plgpu
@@ -1325,7 +1327,7 @@ class PallasCallMultimemTest(TestCase):
         for pair in match.group(1).split(",")
         if pair
     )
-    collective_memory_space = 1
+    collective_memory_space = 1 if xla_client._version <= 495 else 7
     self.assertEqual(operand_memory_spaces.get(0), collective_memory_space)
 
     if jax.process_count() == 1:
